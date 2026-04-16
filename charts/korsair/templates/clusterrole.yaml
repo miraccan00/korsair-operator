@@ -1,0 +1,56 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "korsair.fullname" . }}-manager
+  labels:
+    {{- include "korsair.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+rules:
+# BSO custom resources
+- apiGroups: ["security.blacksyrius.com"]
+  resources:
+  - clustertargets
+  - clustertargets/status
+  - clustertargets/finalizers
+  - imagescanjobs
+  - imagescanjobs/status
+  - imagescanjobs/finalizers
+  - notificationpolicies
+  - notificationpolicies/status
+  - notificationpolicies/finalizers
+  - scanpolicies
+  - scanpolicies/status
+  - scanpolicies/finalizers
+  - securityscanconfigs
+  - securityscanconfigs/status
+  - securityscanconfigs/finalizers
+  verbs: [get, list, watch, create, update, patch, delete]
+# Kubernetes core: secrets (kubeconfig reading for ClusterTargets)
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [get, list, watch]
+# Kubernetes core: pods (image discovery + log reading)
+- apiGroups: [""]
+  resources: [pods, pods/log]
+  verbs: [get, list, watch]
+# Kubernetes core: namespaces (discovery scoping)
+- apiGroups: [""]
+  resources: [namespaces]
+  verbs: [get, list, watch]
+# Kubernetes core: configmaps (read-only cluster-wide for controller-runtime cache;
+# create/update/patch/delete is restricted to operator namespace via Role)
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch]
+# Batch Jobs (scan execution)
+- apiGroups: [batch]
+  resources: [jobs]
+  verbs: [get, list, watch, create, update, patch, delete]
+# Workloads (image discovery)
+- apiGroups: [apps]
+  resources: [deployments, daemonsets, statefulsets]
+  verbs: [get, list, watch]
+# Events
+- apiGroups: [""]
+  resources: [events]
+  verbs: [create, patch]

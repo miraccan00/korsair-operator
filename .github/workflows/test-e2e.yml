@@ -1,0 +1,52 @@
+name: E2E Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-e2e:
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache Kind binary
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/kind
+          key: kind-${{ runner.os }}-latest
+          restore-keys: |
+            kind-${{ runner.os }}-
+
+      - name: Install the latest version of kind
+        run: |
+          if ! command -v kind &> /dev/null; then
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
+            chmod +x ./kind
+            sudo mv ./kind /usr/local/bin/kind
+          fi
+
+      - name: Verify kind installation
+        run: kind version
+
+      - name: Running Test e2e
+        run: |
+          go mod tidy
+          make test-e2e

@@ -1,0 +1,21 @@
+# .devcontainer/kind-config.yaml
+#
+# kind cluster configuration for use inside the devcontainer.
+#
+# WHY THIS DIFFERS FROM examples/clusters/kind-korsair-dev.yaml:
+#   apiServerAddress: "0.0.0.0"  — the control-plane must listen on all
+#   interfaces so the devcontainer can reach it via the kind Docker network's
+#   internal IP (patched into kubeconfig by scripts/kind-create.sh).
+#   The project config uses "127.0.0.1" which is correct for native host dev
+#   but unreachable from inside a container.
+#
+# Usage (from repo root):
+#   bash .devcontainer/scripts/kind-create.sh
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  apiServerAddress: "0.0.0.0"
+  apiServerPort: 6443
+nodes:
+  - role: control-plane
+  - role: worker

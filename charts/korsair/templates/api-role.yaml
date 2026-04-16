@@ -1,0 +1,19 @@
+{{- if .Values.api.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "korsair.fullname" . }}-api
+  namespace: {{ .Values.operatorNamespace }}
+  labels:
+    {{- include "korsair.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+rules:
+# Secrets — kubeconfig storage for ClusterTargets (scoped to operator namespace)
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [get, list, watch, create, update, patch, delete]
+# ConfigMaps — CSV vulnerability reports (scoped to operator namespace)
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch]
+{{- end }}

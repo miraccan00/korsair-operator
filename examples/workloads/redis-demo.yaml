@@ -1,0 +1,50 @@
+# redis-demo — Sample workload for Korsair scanning
+#
+# Deploy this to kind-korsair-dev to provide a real running image for Korsair to discover.
+# Korsair will detect redis:7.2.0-alpine in the "demo" namespace and create ImageScanJobs for it.
+#
+# Usage:
+#   kubectl apply -f examples/workloads/redis-demo.yaml
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-demo
+  namespace: demo
+  labels:
+    app: redis-demo
+    managed-by: korsair-example
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-demo
+  template:
+    metadata:
+      labels:
+        app: redis-demo
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2.0-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-demo
+  namespace: demo
+spec:
+  selector:
+    app: redis-demo
+  ports:
+    - port: 6379
+      targetPort: 6379

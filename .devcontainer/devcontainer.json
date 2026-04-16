@@ -1,0 +1,74 @@
+{
+  "name": "Korsair Operator Dev",
+
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  // devcontainer features are layered on top of the Dockerfile image.
+  // Node.js is installed here (not in the Dockerfile) because the Go base
+  // image doesn't include npm, and the official feature handles version
+  // management and pnpm enablement cleanly.
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22",
+      "installYarnUsingApt": false
+    }
+  },
+
+  // --privileged: required so kind can manage its inner containers
+  // docker.sock: gives the container access to the host Docker daemon (no daemon runs here)
+  "runArgs": [
+    "--privileged",
+    "-v", "/var/run/docker.sock:/var/run/docker.sock"
+  ],
+
+  // Make the Docker socket group-writable so `vscode` user can reach it.
+  // Then run post-install.sh which sets up modules, envtest, and dev tools.
+  "postCreateCommand": "sudo chmod 666 /var/run/docker.sock && bash .devcontainer/post-install.sh",
+
+  "remoteUser": "vscode",
+
+  // Enable Docker BuildKit so --mount=type=cache directives in the Dockerfile work.
+  "remoteEnv": {
+    "DOCKER_BUILDKIT": "1"
+  },
+
+  // Ports forwarded to the host automatically:
+  //   10350 — Tilt web UI
+  //    8090 — Korsair API (go run ./cmd/web or docker compose)
+  //    8080 — Korsair UI (Tilt port-forward from kind)
+  //    5173 — Vite frontend dev server (pnpm dev)
+  //    6443 — Kubernetes API server (local kubectl from host machine)
+  //    5432 — PostgreSQL (docker compose)
+  "forwardPorts": [10350, 8090, 8080, 5173, 6443, 5432],
+  "portsAttributes": {
+    "10350": { "label": "Tilt UI",           "onAutoForward": "openBrowser" },
+    "8090":  { "label": "Korsair API",       "onAutoForward": "notify" },
+    "8080":  { "label": "Korsair UI",        "onAutoForward": "notify" },
+    "5173":  { "label": "Vite Dev Server",   "onAutoForward": "notify" },
+    "6443":  { "label": "K8s API Server",    "onAutoForward": "silent" },
+    "5432":  { "label": "PostgreSQL",        "onAutoForward": "silent" }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "tiltdev.tiltfile-lsp"
+      ],
+      "settings": {
+        "go.toolsManagement.checkForUpdates": "local",
+        "go.useLanguageServer": true,
+        "go.lintTool": "golangci-lint",
+        "[go]": {
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+          }
+        }
+      }
+    }
+  }
+}

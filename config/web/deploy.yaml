@@ -1,0 +1,114 @@
+---
+# ServiceAccount for the web dashboard (read-only access)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: korsair-web
+  namespace: korsair-system
+---
+# ClusterRole: read-only access to BSO CRDs + ConfigMaps
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: korsair-web-viewer
+rules:
+- apiGroups: ["security.blacksyrius.com"]
+  resources:
+  - imagescanjobs
+  - imagescanjobs/status
+  - securityscanconfigs
+  - securityscanconfigs/status
+  - notificationpolicies
+  - notificationpolicies/status
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: korsair-web-viewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: korsair-web-viewer
+subjects:
+- kind: ServiceAccount
+  name: korsair-web
+  namespace: korsair-system
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: korsair-web
+  namespace: korsair-system
+  labels:
+    app: korsair-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: korsair-web
+  template:
+    metadata:
+      labels:
+        app: korsair-web
+    spec:
+      serviceAccountName: korsair-web
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: web
+        image: korsair-web:dev
+        imagePullPolicy: Never   # kind local image
+        command: ["/web"]
+        args: ["--listen-addr=:8090"]
+        ports:
+        - containerPort: 8090
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /api/v1/summary
+            port: http
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 15
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+---
+# Service (ClusterIP — port-forward ile erişeceğiz)
+apiVersion: v1
+kind: Service
+metadata:
+  name: korsair-web
+  namespace: korsair-system
+  labels:
+    app: korsair-web
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8090
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: korsair-web

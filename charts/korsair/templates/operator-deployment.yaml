@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "korsair.fullname" . }}-operator
+  namespace: {{ .Values.operatorNamespace }}
+  labels:
+    {{- include "korsair.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "korsair.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+  template:
+    metadata:
+      labels:
+        {{- include "korsair.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+    spec:
+      serviceAccountName: {{ include "korsair.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: manager
+        image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+        imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+        command: ["/manager"]
+        args:
+        - --health-probe-bind-address=:{{ .Values.operator.healthProbePort }}
+        - --metrics-secure=false
+        {{- if .Values.operator.leaderElect }}
+        - --leader-elect
+        {{- end }}
+        env:
+        - name: BSO_SLACK_WEBHOOK_URL
+          value: {{ .Values.operator.env.slackWebhookURL | quote }}
+        - name: BSO_DISCOVERY_INTERVAL
+          value: {{ .Values.operator.env.discoveryInterval | quote }}
+        - name: BSO_POLL_INTERVAL
+          value: {{ .Values.operator.env.pollInterval | quote }}
+        - name: BSO_NOTIFICATION_COOLDOWN
+          value: {{ .Values.operator.env.notificationCooldown | quote }}
+        - name: BSO_ENVIRONMENT
+          value: {{ .Values.operator.env.environment | quote }}
+        - name: BSO_MAX_DISCOVERY_IMAGES
+          value: {{ .Values.operator.env.maxDiscoveryImages | quote }}
+        - name: BSO_TRIVY_ENABLED
+          value: {{ .Values.scanners.trivy.enabled | quote }}
+        - name: BSO_TRIVY_IMAGE
+          value: {{ .Values.scanners.trivy.image | quote }}
+        - name: BSO_GRYPE_ENABLED
+          value: {{ .Values.scanners.grype.enabled | quote }}
+        - name: BSO_GRYPE_IMAGE
+          value: {{ .Values.scanners.grype.image | quote }}
+        - name: KORSAIR_API_URL
+          value: "http://{{ include "korsair.fullname" . }}-api.{{ .Values.operatorNamespace }}.svc:{{ .Values.api.service.port }}"
+        - name: KORSAIR_INTERNAL_TOKEN
+          value: {{ .Values.api.internalToken | quote }}
+        {{- if .Values.registryCredentials.enabled }}
+        - name: BSO_REGISTRY_PULL_SECRET
+          value: {{ .Values.registryCredentials.existingSecret | default .Values.registryCredentials.secretName | quote }}
+        {{- if .Values.registryCredentials.sourceRegistry }}
+        - name: BSO_REGISTRY_REWRITE_SOURCE
+          value: {{ .Values.registryCredentials.sourceRegistry | quote }}
+        - name: BSO_REGISTRY_REWRITE_TARGET
+          value: {{ .Values.registryCredentials.server | quote }}
+        {{- end }}
+        {{- end }}
+        ports:
+        - containerPort: {{ .Values.operator.healthProbePort }}
+          name: health
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          {{- toYaml .Values.operator.resources | nindent 10 }}
+      terminationGracePeriodSeconds: 10

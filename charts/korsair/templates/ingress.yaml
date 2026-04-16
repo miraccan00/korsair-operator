@@ -1,0 +1,35 @@
+{{- if and .Values.ui.enabled .Values.ui.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "korsair.fullname" . }}-ui
+  namespace: {{ .Values.operatorNamespace }}
+  labels:
+    {{- include "korsair.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+  {{- with .Values.ui.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ui.ingress.className }}
+  ingressClassName: {{ .Values.ui.ingress.className }}
+  {{- end }}
+  {{- if and .Values.ui.ingress.tls .Values.ui.ingress.tlsSecretName }}
+  tls:
+  - hosts:
+    - {{ .Values.ui.ingress.hostname | quote }}
+    secretName: {{ .Values.ui.ingress.tlsSecretName | quote }}
+  {{- end }}
+  rules:
+  - host: {{ .Values.ui.ingress.hostname | quote }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "korsair.fullname" . }}-ui
+            port:
+              name: http
+{{- end }}

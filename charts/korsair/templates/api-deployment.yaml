@@ -1,0 +1,84 @@
+{{- if .Values.api.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "korsair.fullname" . }}-api
+  namespace: {{ .Values.operatorNamespace }}
+  labels:
+    {{- include "korsair.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      {{- include "korsair.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "korsair.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: {{ include "korsair.apiServiceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: api
+        image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+        imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+        command: ["/api"]
+        args:
+        - --listen-addr=:{{ .Values.api.service.port }}
+        ports:
+        - containerPort: {{ .Values.api.service.port }}
+          name: http
+          protocol: TCP
+        env:
+        - name: KORSAIR_DB_HOST
+          value: {{ tpl .Values.api.db.host . | quote }}
+        - name: KORSAIR_DB_PORT
+          value: {{ .Values.api.db.port | quote }}
+        - name: KORSAIR_DB_SSLMODE
+          value: {{ .Values.api.db.sslMode | quote }}
+        - name: KORSAIR_DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.api.db.secretName }}
+              key: username
+        - name: KORSAIR_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.api.db.secretName }}
+              key: password
+        - name: KORSAIR_DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.api.db.secretName }}
+              key: database
+        - name: KORSAIR_INTERNAL_TOKEN
+          value: {{ .Values.api.internalToken | quote }}
+        readinessProbe:
+          httpGet:
+            path: /api/v1/summary
+            port: http
+          initialDelaySeconds: 3
+          periodSeconds: 10
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /api/v1/summary
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 15
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          {{- toYaml .Values.api.resources | nindent 10 }}
+      terminationGracePeriodSeconds: 5
+{{- end }}

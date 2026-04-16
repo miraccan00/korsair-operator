@@ -1,0 +1,106 @@
+# Demo workloads for testing Korsair vulnerability scanning.
+#
+# Deploys a "demo-apps" namespace with three common application images.
+# These images are intentionally slightly older to ensure Trivy finds
+# real CVEs and exercises the full scan pipeline end-to-end.
+#
+# Apply:   kubectl apply -f config/samples/demo-workloads.yaml
+# Remove:  kubectl delete -f config/samples/demo-workloads.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-apps
+  labels:
+    purpose: korsair-demo
+---
+# nginx 1.21 — web server, has known OS-level CVEs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-nginx
+  namespace: demo-apps
+  labels:
+    app: demo-nginx
+    purpose: korsair-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-nginx
+  template:
+    metadata:
+      labels:
+        app: demo-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.21
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+---
+# redis 6.2-alpine — cache layer, has known CVEs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-redis
+  namespace: demo-apps
+  labels:
+    app: demo-redis
+    purpose: korsair-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-redis
+  template:
+    metadata:
+      labels:
+        app: demo-redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:6.2-alpine
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+---
+# python 3.9-slim — application runtime, has known CVEs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-python
+  namespace: demo-apps
+  labels:
+    app: demo-python
+    purpose: korsair-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-python
+  template:
+    metadata:
+      labels:
+        app: demo-python
+    spec:
+      containers:
+      - name: python
+        image: python:3.9-slim
+        command: ["python", "-m", "http.server", "8000"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi

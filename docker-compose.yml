@@ -1,0 +1,63 @@
+# docker-compose.yml — Frontend-only local development
+#
+# Provides Postgres + the Korsair API server so frontend developers can iterate
+# on the React UI without running the full Kubernetes cluster.
+#
+# The Vite dev server already proxies /api/* to localhost:8090 (see
+# frontend/vite.config.ts), so `pnpm -C frontend dev` works out of the box.
+#
+# Usage:
+#   docker compose up -d           # start postgres + api in background
+#   pnpm -C frontend install       # (first time only)
+#   pnpm -C frontend dev           # open http://localhost:5173
+#
+#   docker compose down            # stop and remove containers
+#   docker compose down -v         # also wipe the postgres volume
+#
+# Full-stack Kubernetes dev (Tilt):
+#   tilt up -f Tiltfile-local      # builds and deploys everything into kind
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: bitnamilegacy/postgresql:latest
+    environment:
+      POSTGRESQL_USERNAME: korsair
+      POSTGRESQL_PASSWORD: korsair
+      POSTGRESQL_DATABASE: korsair
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/bitnami/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U korsair -d korsair"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Korsair API ──────────────────────────────────────────────────────────────
+  # Built from source using the runtime-source target so it includes all latest
+  # changes without needing a pre-built binary.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      target: runtime-source
+    environment:
+      KORSAIR_DB_HOST: postgres
+      KORSAIR_DB_PORT: "5432"
+      KORSAIR_DB_USER: korsair
+      KORSAIR_DB_PASSWORD: korsair
+      KORSAIR_DB_NAME: korsair
+      KORSAIR_DB_SSLMODE: disable
+      KORSAIR_INTERNAL_TOKEN: korsair-internal
+    ports:
+      - "8090:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["--listen-addr=:8090"]
+
+volumes:
+  postgres-data:

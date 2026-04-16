@@ -1,0 +1,208 @@
+name: Docker Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image version tag (e.g., 1.0.0)'
+        required: true
+        type: string
+
+env:
+  REGISTRY: docker.io
+  OPERATOR_IMAGE: miraccan/korsair-operator
+  API_IMAGE: miraccan/korsair-operator-api
+  UI_IMAGE: miraccan/korsair-operator-ui
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────
+  # Build Operator (runs in parallel with API & UI)
+  # ────────────────────────────────────────────────────────────────────────
+  build-operator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for change detection
+
+      - name: Check if operator needs rebuild
+        id: changes
+        run: |
+          # Always build for workflow_dispatch (manual releases)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "✅ Manual release: Always build"
+          else
+            # Skip unchanged images on push events
+            git diff --quiet HEAD~1 HEAD -- Dockerfile cmd/main.go api/ internal/ go.mod go.sum && \
+              echo "skip=true" >> $GITHUB_OUTPUT || \
+              echo "skip=false" >> $GITHUB_OUTPUT
+            echo "🔍 Auto-detect: skip=$(cat $GITHUB_OUTPUT | grep skip)"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.changes.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: steps.changes.outputs.skip != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push operator
+        if: steps.changes.outputs.skip != 'true'
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.OPERATOR_IMAGE }}:latest
+            ${{ env.OPERATOR_IMAGE }}:${{ inputs.version }}
+          cache-from: |
+            type=registry,ref=${{ env.OPERATOR_IMAGE }}:buildcache
+            type=gha,scope=operator
+          cache-to: type=registry,ref=${{ env.OPERATOR_IMAGE }}:buildcache,mode=max
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Build API (runs in parallel with Operator & UI)
+  # ────────────────────────────────────────────────────────────────────────
+  build-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if API needs rebuild
+        id: changes
+        run: |
+          # Always build for workflow_dispatch (manual releases)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "✅ Manual release: Always build"
+          else
+            # Skip unchanged images on push events
+            git diff --quiet HEAD~1 HEAD -- Dockerfile.api cmd/web/ internal/ go.mod go.sum && \
+              echo "skip=true" >> $GITHUB_OUTPUT || \
+              echo "skip=false" >> $GITHUB_OUTPUT
+            echo "🔍 Auto-detect: skip=$(cat $GITHUB_OUTPUT | grep skip)"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.changes.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: steps.changes.outputs.skip != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push API
+        if: steps.changes.outputs.skip != 'true'
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: Dockerfile.api
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.API_IMAGE }}:latest
+            ${{ env.API_IMAGE }}:${{ inputs.version }}
+          cache-from: |
+            type=registry,ref=${{ env.API_IMAGE }}:buildcache
+            type=gha,scope=api
+          cache-to: type=registry,ref=${{ env.API_IMAGE }}:buildcache,mode=max
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Build UI (runs in parallel with Operator & API)
+  # ────────────────────────────────────────────────────────────────────────
+  build-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if UI needs rebuild
+        id: changes
+        run: |
+          # Always build for workflow_dispatch (manual releases)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "✅ Manual release: Always build"
+          else
+            # Skip unchanged images on push events
+            git diff --quiet HEAD~1 HEAD -- Dockerfile.ui frontend/ hack/nginx-ui.conf.template && \
+              echo "skip=true" >> $GITHUB_OUTPUT || \
+              echo "skip=false" >> $GITHUB_OUTPUT
+            echo "🔍 Auto-detect: skip=$(cat $GITHUB_OUTPUT | grep skip)"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.changes.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: steps.changes.outputs.skip != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push UI
+        if: steps.changes.outputs.skip != 'true'
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: Dockerfile.ui
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.UI_IMAGE }}:latest
+            ${{ env.UI_IMAGE }}:${{ inputs.version }}
+          cache-from: |
+            type=registry,ref=${{ env.UI_IMAGE }}:buildcache
+            type=gha,scope=ui
+          cache-to: type=registry,ref=${{ env.UI_IMAGE }}:buildcache,mode=max
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Summary (waits for all 3 builds to complete)
+  # ────────────────────────────────────────────────────────────────────────
+  summary:
+    needs: [build-operator, build-api, build-ui]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    steps:
+      - name: Publish Summary
+        run: |
+          echo "## 🎉 Docker Images Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "- Operator: ${{ needs.build-operator.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- API: ${{ needs.build-api.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- UI: ${{ needs.build-ui.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Published Images" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tags |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.OPERATOR_IMAGE }}\` | \`latest\`, \`${{ inputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.API_IMAGE }}\` | \`latest\`, \`${{ inputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.UI_IMAGE }}\` | \`latest\`, \`${{ inputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

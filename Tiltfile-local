@@ -1,0 +1,289 @@
+# Tiltfile-local — Korsair Operator (LOCAL BUILD mode)
+#
+# Builds operator / api / ui images from source on every save and loads
+# them into the kind cluster. Use when iterating on code.
+#
+# Usage:
+#   $ tilt up -f Tiltfile-local
+#
+# For DockerHub-based runs (no local build), use:
+#   $ tilt up -f Tiltfile-remote
+
+# ── Configuration ─────────────────────────────────────────────────────────
+
+OPERATOR_IMAGE = "korsair-operator"
+API_IMAGE = "korsair-operator-api"
+UI_IMAGE = "korsair-operator-ui"
+DEV_TAG = "dev"
+
+KORSAIR_NAMESPACE = "korsair-system"
+KIND_CLUSTER_NAME = "korsair-dev"
+KIND_CONFIG_FILE = ".devcontainer/kind-config.yaml"
+
+# ── Load Helper Functions ────────────────────────────────────────────────
+
+load('ext://restart_process', 'docker_build_with_restart')
+
+update_settings(max_parallel_updates=20)
+
+allow_k8s_contexts("kind-" + KIND_CLUSTER_NAME)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEBUG — Health checks & observability
+# ══════════════════════════════════════════════════════════════════════════════
+
+local_resource(
+    name="operator-status",
+    cmd="""
+    echo '📊 Operator Pod Status:'
+    kubectl get pods -n %s -l app.kubernetes.io/component=operator
+    echo ''
+    echo '📋 ImageScanJobs:'
+    kubectl get imagescanjobs -A 2>/dev/null | head -20 || echo 'No ImageScanJobs yet'
+    """ % KORSAIR_NAMESPACE,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=["2-debug"],
+)
+
+local_resource(
+    name="get-crds",
+    cmd="kubectl get crds -A | grep security.blacksyrius.com || echo '⚠️  CRDs not found (normal if just deployed)'",
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["2-debug"],
+    deps=["operator-status"],
+)
+
+local_resource(
+    name="operator-logs",
+    serve_cmd="kubectl logs -n %s -l app.kubernetes.io/component=operator --tail=100 -f 2>/dev/null || echo 'No logs yet'" % KORSAIR_NAMESPACE,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["2-debug"],
+)
+
+local_resource(
+    name="ui-port-forward",
+    serve_cmd="kubectl port-forward -n %s svc/korsair-ui 8080:80" % KORSAIR_NAMESPACE,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["2-debug"],
+    links=[link("http://localhost:8080", "Open UI")],
+)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SETUP — Cluster bootstrap
+# ══════════════════════════════════════════════════════════════════════════════
+
+local_resource(
+    name="kind-cluster",
+    cmd="bash .devcontainer/scripts/kind-create.sh %s" % KIND_CLUSTER_NAME,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["3-setup"],
+)
+
+local_resource(
+    name="k8s-context",
+    cmd="kubectl config use-context kind-%s" % KIND_CLUSTER_NAME,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["3-setup"],
+    deps=["kind-cluster"],
+)
+
+local_resource(
+    name="k8s-ready",
+    cmd="""
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      if kubectl --context kind-%s cluster-info >/dev/null 2>&1; then
+        echo '✅ Kubernetes ready'
+        exit 0
+      fi
+      echo "⏳ Waiting for cluster (attempt $i/10)..."
+      sleep 2
+    done
+    echo '❌ Cluster not ready after 20s'
+    kubectl --context kind-%s cluster-info
+    exit 1
+    """ % (KIND_CLUSTER_NAME, KIND_CLUSTER_NAME),
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["3-setup"],
+    deps=["k8s-context"],
+)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BUILD — docker build + kind load (explicit, as local_resource)
+# ══════════════════════════════════════════════════════════════════════════════
+# Each image: build on host docker, then load into kind node containerd so
+# kubelet can find it with imagePullPolicy=Never. Helm (below) references
+# <image>:dev which must exist in the kind node.
+
+local_resource(
+    name="build-operator",
+    cmd="CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/manager ./cmd && docker build --target runtime-prebuilt -t %s:%s -f Dockerfile . && kind load docker-image %s:%s --name %s" % (OPERATOR_IMAGE, DEV_TAG, OPERATOR_IMAGE, DEV_TAG, KIND_CLUSTER_NAME),
+    deps=["./api", "./cmd/main.go", "./internal", "./go.mod", "./go.sum", "./Dockerfile"],
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["4-deploy"],
+    resource_deps=["k8s-ready"],
+)
+
+local_resource(
+    name="build-api",
+    cmd="CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/api ./cmd/web && docker build --target runtime-prebuilt -t %s:%s -f Dockerfile.api . && kind load docker-image %s:%s --name %s" % (API_IMAGE, DEV_TAG, API_IMAGE, DEV_TAG, KIND_CLUSTER_NAME),
+    deps=["./api", "./cmd/web", "./internal", "./go.mod", "./go.sum", "./Dockerfile.api"],
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["4-deploy"],
+    resource_deps=["k8s-ready"],
+)
+
+local_resource(
+    name="build-ui",
+    cmd="docker build -t %s:%s -f Dockerfile.ui . && kind load docker-image %s:%s --name %s" % (UI_IMAGE, DEV_TAG, UI_IMAGE, DEV_TAG, KIND_CLUSTER_NAME),
+    deps=["./frontend/src", "./frontend/public", "./frontend/package.json", "./frontend/pnpm-lock.yaml", "./frontend/server.mjs", "./frontend/vite.config.ts", "./frontend/tsconfig.json", "./frontend/index.html", "./Dockerfile.ui"],
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["4-deploy"],
+    resource_deps=["k8s-ready"],
+)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEPLOY — Helm with LOCAL images (dev tag, pullPolicy Never)
+# ══════════════════════════════════════════════════════════════════════════════
+
+local_resource(
+    name="helm-deps",
+    cmd="""
+    set -e
+    echo '📦 Resolving chart dependencies (Bitnami PostgreSQL)...'
+    helm repo add bitnami https://charts.bitnami.com/bitnami >/dev/null 2>&1 || true
+    helm repo update bitnami >/dev/null
+    helm dependency update ./charts/korsair
+    """,
+    deps=["./charts/korsair/Chart.yaml"],
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["4-deploy"],
+    resource_deps=["k8s-ready"],
+)
+
+local_resource(
+    name="helm-install",
+    cmd="""
+    echo "🎯 Deploying operator + api + ui + postgres from LOCAL images (%s tag)..."
+    helm upgrade --install korsair ./charts/korsair \
+      --create-namespace \
+      --namespace %s \
+      --set operator.image.repository=%s \
+      --set operator.image.tag=%s \
+      --set operator.image.pullPolicy=Never \
+      --set api.enabled=true \
+      --set api.image.repository=%s \
+      --set api.image.tag=%s \
+      --set api.image.pullPolicy=Never \
+      --set ui.enabled=true \
+      --set ui.image.repository=%s \
+      --set ui.image.tag=%s \
+      --set ui.image.pullPolicy=Never \
+      --set installCRDs=true \
+      --wait \
+      --timeout 5m
+    echo "✅ Deployment complete!"
+    """ % (DEV_TAG, KORSAIR_NAMESPACE, OPERATOR_IMAGE, DEV_TAG, API_IMAGE, DEV_TAG, UI_IMAGE, DEV_TAG),
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["4-deploy"],
+    resource_deps=["build-operator", "build-api", "build-ui", "helm-deps"],
+)
+
+local_resource(
+    name="deploy-samples",
+    cmd="""
+    set -e
+    echo '📦 Deploying sample workloads from examples/workloads/...'
+    kubectl create namespace default --dry-run=client -o yaml | kubectl apply -f - || true
+    kubectl apply -f examples/workloads/
+    echo '✅ Sample workloads deployed!'
+    kubectl get pods -n default 2>/dev/null | head -10 || echo 'Waiting for pods...'
+    """,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["4-deploy"],
+    resource_deps=["helm-install"],
+)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TEST — Smoke tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+local_resource(
+    name="smoke-test",
+    cmd="""
+    set -e
+    echo '🧪 Running smoke test: applying sample SecurityScanConfig...'
+    kubectl apply -f config/samples/security_v1alpha1_securityscanconfig.yaml
+
+    echo '⏳ Waiting up to 60s for ImageScanJob to appear...'
+    START=$(date +%s)
+    while true; do
+      if kubectl get imagescanjobs -A 2>/dev/null | grep -q "."; then
+        echo '✅ Smoke test PASSED: ImageScanJob created successfully!'
+        break
+      fi
+      ELAPSED=$(($(date +%s) - START))
+      if [ $ELAPSED -ge 60 ]; then
+        echo '❌ Smoke test FAILED: No ImageScanJob within 60s'
+        exit 1
+      fi
+      sleep 3
+    done
+    """,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=["5-tests"],
+)
+
+local_resource(
+    name="db-verify",
+    cmd="""
+    set -e
+    NS=%s
+    echo '🔎 Waiting up to 3m for at least one row in scan_report_rows...'
+    PG_POD=$(kubectl -n $NS get pod -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}')
+    if [ -z "$PG_POD" ]; then echo '❌ Postgres pod not found'; exit 1; fi
+
+    START=$(date +%%s)
+    while true; do
+      COUNT=$(kubectl -n $NS exec $PG_POD -- bash -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -U korsair -d korsair -tA -c "SELECT count(*) FROM scan_report_rows;"' 2>/dev/null || echo 0)
+      COUNT=$(echo "$COUNT" | tr -d '[:space:]')
+      if [ -n "$COUNT" ] && [ "$COUNT" -gt 0 ] 2>/dev/null; then
+        echo "✅ scan_report_rows has $COUNT rows — DB path working!"
+        break
+      fi
+      ELAPSED=$(($(date +%%s) - START))
+      if [ $ELAPSED -ge 180 ]; then
+        echo "❌ No rows after 3m (current=$COUNT). Check api + operator logs."
+        kubectl -n $NS get pods
+        exit 1
+      fi
+      echo "⏳ rows=$COUNT (elapsed ${ELAPSED}s) — waiting..."
+      sleep 10
+    done
+
+    echo ''
+    echo '📝 Sample rows:'
+    kubectl -n $NS exec $PG_POD -- bash -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -U korsair -d korsair -c "SELECT isj_namespace, isj_name, severity, vulnerability_id FROM scan_report_rows LIMIT 5;"'
+
+    echo ''
+    echo '📭 Legacy -report ConfigMaps (should be empty):'
+    kubectl get cm -A | grep -- '-report' || echo '  (none — CM write path is gone ✅)'
+    """ % KORSAIR_NAMESPACE,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=["5-tests"],
+    resource_deps=["helm-install"],
+)
+
+print("""
+╔════════════════════════════════════════════════════════════════╗
+║  🚀 Korsair Operator — LOCAL BUILD mode                        ║
+╠════════════════════════════════════════════════════════════════╣
+║  Builds operator / api / ui from source on every save.        ║
+║  Images tagged :%s and loaded into kind automatically.       ║
+║                                                                ║
+║  Web UI:    http://localhost:10350                            ║
+║  Cluster:   kind-%s                                    ║
+║  Namespace: %s                                       ║
+║                                                                ║
+║  Switch to DockerHub mode:  tilt up -f Tiltfile-remote        ║
+╚════════════════════════════════════════════════════════════════╝
+""" % (DEV_TAG, KIND_CLUSTER_NAME, KORSAIR_NAMESPACE))

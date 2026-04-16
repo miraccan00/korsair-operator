@@ -1,0 +1,193 @@
+# BSO Helm chart values
+# Override with --set or a custom values file
+
+# Install BSO CRDs as part of this chart
+installCRDs: true
+
+# Namespace where BSO resources are deployed
+operatorNamespace: korsair-system
+
+# ── Service Account ───────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# ── Operator Deployment ───────────────────────────────────────────────────
+operator:
+  image:
+    repository: docker.io/miraccan/korsair-operator
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  env:
+    slackWebhookURL: ""
+    discoveryInterval: "5m"
+    pollInterval: "15s"
+    notificationCooldown: "1h"
+    # environment: "test" limits image discovery to maxDiscoveryImages (default 50)
+    # to avoid filling node disk space in dev/test setups.
+    # Set to "prod" (or leave empty) for unlimited discovery.
+    environment: "prod"
+    # maxDiscoveryImages: maximum unique images to scan per cycle. 0 = use
+    # environment-based default (50 for test, unlimited for prod).
+    maxDiscoveryImages: 0
+
+  leaderElect: false
+  healthProbePort: 8081
+
+# ── Scanners ──────────────────────────────────────────────────────────────
+scanners:
+  trivy:
+    enabled: true
+    image: aquasec/trivy:0.58.1
+  grype:
+    enabled: false
+    image: anchore/grype:v0.90.0
+
+# ── API Server ────────────────────────────────────────────────────────────
+# Go binary serving /api/v1/* REST endpoints (no embedded UI).
+# Runs as ClusterIP — not internet-facing.
+api:
+  enabled: false
+
+  image:
+    repository: docker.io/miraccan/korsair-operator-api
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  service:
+    type: ClusterIP
+    port: 8090
+
+  # ── API ↔ DB wiring ─────────────────────────────────────────────────────
+  # Host defaults to the in-chart Bitnami PostgreSQL service. Override to
+  # point at an external DB; in that case set postgresql.enabled=false and
+  # dbCredentials.create=false, and provide your own Secret via
+  # api.db.secretName.
+  db:
+    host: "{{ .Release.Name }}-postgresql"
+    port: 5432
+    sslMode: disable
+    secretName: korsair-db-credentials
+
+  # Shared-secret token the operator uses to authenticate its POSTs to the
+  # internal /api/v1/jobs/.../report endpoint. Empty disables the check
+  # (not recommended in multi-tenant clusters).
+  internalToken: "korsair-internal"
+
+# ── UI ────────────────────────────────────────────────────────────────────
+# Node (Fastify) pod serving the React SPA and proxying /api/ to the API service.
+# Only internet-facing component — Ingress is defined here only.
+ui:
+  enabled: false
+
+  image:
+    repository: docker.io/miraccan/korsair-operator-ui
+    tag: latest
+    pullPolicy: IfNotPresent
+    # Runs as non-root (USER node) on port 8080
+
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+  ingress:
+    enabled: false
+    className: ""
+    hostname: korsair.example.com
+    annotations: {}
+    tls: false
+    tlsSecretName: ""
+
+# ── PostgreSQL (Bitnami subchart) ─────────────────────────────────────────
+# Stores scan reports (CVE rows) that used to live in per-ImageScanJob
+# ConfigMaps. Disable to bring your own DB — see api.db.* above.
+postgresql:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: latest
+  auth:
+    existingSecret: korsair-db-credentials
+    secretKeys:
+      adminPasswordKey: postgres-password
+      userPasswordKey: password
+    username: korsair
+    database: korsair
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
+    service:
+      ports:
+        postgresql: 5432
+
+# ── DB Credentials Secret ─────────────────────────────────────────────────
+# Helm-managed Secret holding DB username/password/database (base64-encoded
+# by Helm). Swap for Vault / external-secrets by setting create: false and
+# pointing api.db.secretName (and postgresql.auth.existingSecret) at your
+# own Secret with keys: username, password, database, postgres-password.
+dbCredentials:
+  create: true
+  secretName: korsair-db-credentials
+  username: korsair
+  password: korsair
+  database: korsair
+
+# ── Registry Credentials ──────────────────────────────────────────────────
+# Provides docker authentication to Trivy/Grype scan jobs for private
+# registries (e.g. Nexus Docker group at registry.company_name.com).
+#
+# Option A — let Helm create the Secret from username/password:
+#   registryCredentials.enabled: true
+#   registryCredentials.server:   registry.company_name.com
+#   registryCredentials.username: <user>
+#   registryCredentials.password: <pass>
+#
+# Option B — use a pre-existing kubernetes.io/dockerconfigjson Secret:
+#   registryCredentials.enabled: true
+#   registryCredentials.existingSecret: "my-registry-secret"
+registryCredentials:
+  enabled: false
+  existingSecret: ""    # if set, no new Secret is created; this name is used directly
+  server: ""            # e.g. registry.company_name.com  (Docker group / auth endpoint)
+  username: ""
+  password: ""
+  secretName: "korsair-registry-credentials"
+  # sourceRegistry: the registry hostname used in pod image specs when it differs
+  # from `server`.  When set, any image whose registry matches this value is
+  # rewritten to use `server` before being passed to Trivy/Grype.
+  #
+  # Example: pods pull from BSO_REGISTRY_REWRITE_SOURCE.company_name.com (direct Nexus hosted repo)
+  # but Trivy must authenticate via registry.company_name.com (Docker group):
+  #   server:          registry.company_name.com
+  #   sourceRegistry:  BSO_REGISTRY_REWRITE_SOURCE.company_name.com
+  sourceRegistry: ""

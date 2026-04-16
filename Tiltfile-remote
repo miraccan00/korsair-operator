@@ -1,0 +1,206 @@
+# Tiltfile-remote — Korsair Operator (REMOTE / DockerHub mode)
+#
+# Deploys published DockerHub images into a local Kind cluster.
+# Use this to test the latest release without building from source.
+#
+# Usage:
+#   $ tilt up                      (default — this file is loaded by Tiltfile)
+#   $ tilt up -f Tiltfile-remote   (explicit)
+#
+# For source builds (iterating on code), use:
+#   $ tilt up -f Tiltfile-local
+
+# ── Configuration ─────────────────────────────────────────────────────────
+
+KORSAIR_NAMESPACE = "korsair-system"
+KIND_CLUSTER_NAME = "korsair-dev"
+KIND_CONFIG_FILE  = "examples/clusters/kind-korsair-dev.yaml"
+
+update_settings(max_parallel_updates=20)
+allow_k8s_contexts(KIND_CLUSTER_NAME)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEBUG — Health checks & observability
+# ══════════════════════════════════════════════════════════════════════════════
+
+local_resource(
+    name="operator-status",
+    cmd="""
+    echo '📊 Operator Pod Status:'
+    kubectl get pods -n %s -l app.kubernetes.io/component=operator
+    echo ''
+    echo '📋 ImageScanJobs:'
+    kubectl get imagescanjobs -A 2>/dev/null | head -20 || echo 'No ImageScanJobs yet'
+    """ % KORSAIR_NAMESPACE,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=["2-debug"],
+)
+
+local_resource(
+    name="get-crds",
+    cmd="kubectl get crds -A | grep security.blacksyrius.com || echo '⚠️  CRDs not found (normal if just deployed)'",
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["2-debug"],
+    deps=["operator-status"],
+)
+
+local_resource(
+    name="operator-logs",
+    serve_cmd="kubectl logs -n %s -l app.kubernetes.io/component=operator --tail=100 -f 2>/dev/null || echo 'No logs yet'" % KORSAIR_NAMESPACE,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["2-debug"],
+)
+
+local_resource(
+    name="ui-port-forward",
+    serve_cmd="kubectl port-forward -n %s svc/korsair-ui 8080:80" % KORSAIR_NAMESPACE,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["2-debug"],
+    links=[link("http://localhost:8080", "Open UI")],
+)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SETUP — Cluster bootstrap
+# ══════════════════════════════════════════════════════════════════════════════
+
+local_resource(
+    name="kind-cluster",
+    cmd="""
+    if kind get clusters 2>/dev/null | grep -qx %s; then
+      echo '✅ Kind cluster "%s" already exists — skipping create'
+    else
+      echo '🚀 Creating kind cluster "%s" from %s...'
+      kind create cluster --name %s --config %s --wait 5m --image kindest/node:v1.32.0
+    fi
+    """ % (KIND_CLUSTER_NAME, KIND_CLUSTER_NAME, KIND_CLUSTER_NAME, KIND_CONFIG_FILE, KIND_CLUSTER_NAME, KIND_CONFIG_FILE),
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["3-setup"],
+)
+
+local_resource(
+    name="k8s-context",
+    cmd="kubectl config use-context kind-%s" % KIND_CLUSTER_NAME,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["3-setup"],
+    deps=["kind-cluster"],
+)
+
+local_resource(
+    name="k8s-ready",
+    cmd="""
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      if kubectl --context kind-%s cluster-info >/dev/null 2>&1; then
+        echo '✅ Kubernetes ready'
+        exit 0
+      fi
+      echo "⏳ Waiting for cluster (attempt $i/10)..."
+      sleep 2
+    done
+    echo '❌ Cluster not ready after 20s'
+    kubectl --context kind-%s cluster-info
+    exit 1
+    """ % (KIND_CLUSTER_NAME, KIND_CLUSTER_NAME),
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["3-setup"],
+    deps=["k8s-context"],
+)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEPLOY — Helm with DockerHub images
+# ══════════════════════════════════════════════════════════════════════════════
+
+local_resource(
+    name="helm-deps",
+    cmd="""
+    set -e
+    echo '📦 Resolving chart dependencies (Bitnami PostgreSQL)...'
+    helm repo add bitnami https://charts.bitnami.com/bitnami >/dev/null 2>&1 || true
+    helm repo update bitnami >/dev/null
+    helm dependency update ./charts/korsair
+    """,
+    deps=["./charts/korsair/Chart.yaml"],
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["4-deploy"],
+    resource_deps=["k8s-ready"],
+)
+
+local_resource(
+    name="helm-install",
+    cmd="""
+    echo '🎯 Deploying operator + api + ui + postgres from DockerHub...'
+    helm upgrade --install korsair ./charts/korsair \
+      --create-namespace \
+      --namespace %s \
+      --set operator.image.pullPolicy=IfNotPresent \
+      --set api.enabled=true \
+      --set api.image.pullPolicy=IfNotPresent \
+      --set ui.enabled=true \
+      --set ui.image.pullPolicy=IfNotPresent \
+      --set installCRDs=true \
+      --wait \
+      --timeout 5m
+    echo '✅ Deployment complete!'
+    """ % KORSAIR_NAMESPACE,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["4-deploy"],
+    resource_deps=["helm-deps"],
+)
+
+local_resource(
+    name="deploy-samples",
+    cmd="""
+    set -e
+    echo '📦 Deploying sample workloads from examples/workloads/...'
+    kubectl create namespace default --dry-run=client -o yaml | kubectl apply -f - || true
+    kubectl apply -f examples/workloads/
+    echo '✅ Sample workloads deployed!'
+    kubectl get pods -n default 2>/dev/null | head -10 || echo 'Waiting for pods...'
+    """,
+    trigger_mode=TRIGGER_MODE_AUTO,
+    labels=["4-deploy"],
+    resource_deps=["helm-install"],
+)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TEST — Smoke tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+local_resource(
+    name="smoke-test",
+    cmd="""
+    set -e
+    echo '🧪 Running smoke test: applying sample SecurityScanConfig...'
+    kubectl apply -f config/samples/security_v1alpha1_securityscanconfig.yaml
+
+    echo '⏳ Waiting up to 60s for ImageScanJob to appear...'
+    START=$(date +%s)
+    while true; do
+      if kubectl get imagescanjobs -A 2>/dev/null | grep -q "."; then
+        echo '✅ Smoke test PASSED: ImageScanJob created successfully!'
+        break
+      fi
+      ELAPSED=$(($(date +%s) - START))
+      if [ $ELAPSED -ge 60 ]; then
+        echo '❌ Smoke test FAILED: No ImageScanJob within 60s'
+        exit 1
+      fi
+      sleep 3
+    done
+    """,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=["5-tests"],
+)
+
+print("""
+╔════════════════════════════════════════════════════════════════╗
+║  🚀 Korsair Operator — REMOTE mode (DockerHub images)          ║
+╠════════════════════════════════════════════════════════════════╣
+║  Deploys the latest published release — no local build.        ║
+║                                                                ║
+║  Web UI:    http://localhost:10350                            ║
+║  Cluster:   kind-%s                                    ║
+║  Namespace: %s                                       ║
+║                                                                ║
+║  Switch to local source builds:  tilt up -f Tiltfile-local    ║
+╚════════════════════════════════════════════════════════════════╝
+""" % (KIND_CLUSTER_NAME, KORSAIR_NAMESPACE))

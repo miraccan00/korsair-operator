@@ -1,0 +1,20 @@
+apiVersion: security.blacksyrius.com/v1alpha1
+kind: SecurityScanConfig
+metadata:
+  name: test-cluster-scan
+spec:
+  imageSources:
+    kubernetes:
+      enabled: true
+      excludeNamespaces:
+        - kube-system
+        - kube-public
+        - kube-node-lease
+        - korsair-system
+  scanners:
+    - trivy
+    # - grype   # uncomment to also scan with Grype
+  targetNamespace: korsair-system
+  notificationCooldown: "1h"
+  # schedule: "0 2 * * *"           # cron: run daily at 02:00 UTC
+  # notificationPolicyRef: "default-policy"  # reference a NotificationPolicy in targetNamespace

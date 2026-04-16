@@ -1,0 +1,17 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "korsair.fullname" . }}-manager
+  namespace: {{ .Values.operatorNamespace }}
+  labels:
+    {{- include "korsair.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+rules:
+# ConfigMaps — CSV vulnerability report storage (scoped to operator namespace)
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch, create, update, patch, delete]
+# Leader election leases (scoped to operator namespace)
+- apiGroups: ["coordination.k8s.io"]
+  resources: [leases]
+  verbs: [get, list, watch, create, update, patch, delete]

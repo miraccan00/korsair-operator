@@ -1,0 +1,26 @@
+apiVersion: v2
+name: korsair
+description: >
+  BlackSyrius Scan Operator — Kubernetes vulnerability scanning operator
+  with optional web dashboard. Supports Trivy and Grype scanners, cron scheduling,
+  Slack notifications, and CSV vulnerability reports.
+type: application
+version: 0.3.0
+appVersion: "v0.3.0"
+keywords:
+  - security
+  - vulnerability
+  - scanning
+  - kubernetes
+  - trivy
+  - grype
+maintainers:
+  - name: miraccan00
+home: https://github.com/miraccan00/korsair-operator
+sources:
+  - https://github.com/miraccan00/korsair-operator
+dependencies:
+  - name: postgresql
+    version: "15.5.38"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

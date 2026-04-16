@@ -1,0 +1,33 @@
+{{- if .Values.api.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "korsair.fullname" . }}-api
+  labels:
+    {{- include "korsair.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+rules:
+# BSO custom resources — read (dashboard views)
+- apiGroups: ["security.blacksyrius.com"]
+  resources:
+  - imagescanjobs
+  - imagescanjobs/status
+  - securityscanconfigs
+  - securityscanconfigs/status
+  - notificationpolicies
+  - notificationpolicies/status
+  verbs: [get, list, watch]
+# ImageScanJob write — manual scan trigger (POST /api/v1/scan) and delete
+- apiGroups: ["security.blacksyrius.com"]
+  resources: [imagescanjobs]
+  verbs: [create, delete]
+# ClusterTarget — full access for cluster management UI
+- apiGroups: ["security.blacksyrius.com"]
+  resources: [clustertargets, clustertargets/status]
+  verbs: [get, list, watch, create, update, patch, delete]
+# ConfigMaps — read-only cluster-wide for controller-runtime cache;
+# write operations are restricted to operator namespace via Role
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch]
+{{- end }}

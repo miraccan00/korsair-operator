@@ -1,0 +1,20 @@
+# kind-korsair-dev — Developer workload cluster
+#
+# This cluster simulates a "target" cluster that Korsair discovers and scans.
+# It runs the demo nginx deployment (and any other workloads you deploy for testing).
+#
+# Usage:
+#   kind create cluster --name korsair-dev --config examples/clusters/kind-korsair-dev.yaml
+#
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: korsair-dev
+nodes:
+  - role: control-plane
+  - role: worker
+networking:
+  # 0.0.0.0 — listens on all interfaces so the devcontainer can reach this
+  # cluster via the kind Docker network's internal IP. Also works for native
+  # host dev (127.0.0.1 would only be reachable from the host itself).
+  apiServerAddress: "0.0.0.0"
+  apiServerPort: 6444

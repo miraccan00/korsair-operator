@@ -1,0 +1,32 @@
+# Exclude heavy/generated directories that don't belong in the Docker build context.
+# Used by all Dockerfiles (Dockerfile, Dockerfile.api, Dockerfile.ui).
+
+# Version control
+.git/
+.github/
+
+# Local dev artifacts
+# NOTE: bin/ is intentionally NOT excluded — Dockerfile *:runtime-prebuilt stages
+# copy host-built binaries from bin/ for fast Tilt iteration. The
+# *:runtime-source stages build from source and ignore bin/ contents.
+*.log
+.env
+.claude/
+
+# Frontend build artifacts (Dockerfile.ui builds frontend from source in Stage 1)
+frontend/node_modules/
+frontend/dist/
+cmd/web/static/dist/
+
+# Test & tooling binaries
+testbin/
+
+# Operational scripts (not needed in images)
+hack/
+
+# Local dev compose file
+docker-compose.yml
+
+# IDE
+.idea/
+.vscode/

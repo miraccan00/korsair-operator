@@ -1,0 +1,20 @@
+apiVersion: security.blacksyrius.com/v1alpha1
+kind: NotificationPolicy
+metadata:
+  name: default-policy
+  namespace: korsair-system
+spec:
+  # webhookURL is the Slack Incoming Webhook URL for this team/policy.
+  webhookURL: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX"
+
+  # thresholds: only notify when at least one image exceeds these limits.
+  # If omitted, all completed scans trigger a notification.
+  thresholds:
+    critical: 0   # alert on any CRITICAL CVE
+    high: 5       # alert only if HIGH CVEs exceed 5
+
+  # severityFilter: only include these severities in the notification message.
+  # If omitted, all severities are shown.
+  severityFilter:
+    - CRITICAL
+    - HIGH

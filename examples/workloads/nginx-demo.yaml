@@ -1,0 +1,58 @@
+# nginx-demo — Sample workload for Korsair scanning
+#
+# Deploy this to kind-korsair-dev to provide a real running image for Korsair to discover.
+# Korsair will detect nginx:1.25.3 in the "demo" namespace and create ImageScanJobs for it.
+#
+# Usage:
+#   kubectl --context kind-korsair-dev apply -f examples/workloads/nginx-demo.yaml
+#
+# Watch Korsair discover and scan it:
+#   kubectl --context kind-bly-hub-cluster get imagescanjobs -A -w
+#
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-demo
+  namespace: demo
+  labels:
+    app: nginx-demo
+    managed-by: korsair-example
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-demo
+  template:
+    metadata:
+      labels:
+        app: nginx-demo
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.25.3
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-demo
+  namespace: demo
+spec:
+  selector:
+    app: nginx-demo
+  ports:
+    - port: 80
+      targetPort: 80
